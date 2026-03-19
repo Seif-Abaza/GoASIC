@@ -3,6 +3,7 @@ package miners
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"strconv"
 	"time"
@@ -16,8 +17,9 @@ import (
 // Avalon encodes sensor data in "MM ID0" string fields:
 //   "TA[55 60 58] FAN[1200 1350] TEMP[65]"
 type Avalonminer struct {
-	ip     string
-	rpcCli *rpc.Client
+	ip      string
+	rpcCli  *rpc.Client
+	httpCli *http.Client
 }
 
 func NewAvalonminer(ip string) (*Avalonminer, error) {
@@ -25,7 +27,10 @@ func NewAvalonminer(ip string) (*Avalonminer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Avalonminer{ip: ip, rpcCli: cli}, nil
+	return &Avalonminer{ip: ip, rpcCli: cli, httpCli: &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: insecureTLS()},
+	}}, nil
 }
 
 func (a *Avalonminer) IP() string    { return a.ip }
@@ -206,4 +211,75 @@ func parseAvalonFieldInt(s, tag string) []int {
 		}
 	}
 	return result
+}
+
+// ── SetMode ───────────────────────────────────────────────────────────────────
+
+func (a *Avalonminer) SetMode(ctx context.Context, mode MiningMode) error {
+	if mode == ModeSleep {
+		return a.StopMining(ctx)
+	}
+	modeMap := map[MiningMode]string{
+		ModeNormal:   "normal",
+		ModeLowPower: "eco",
+		ModeHighPerf: "turbo",
+	}
+	m, ok := modeMap[mode]
+	if !ok {
+		return fmt.Errorf("avalonminer: unsupported mode %q", mode)
+	}
+	_, err := a.rpcCli.Send(ctx, "setmode", map[string]string{"mode": m})
+	return err
+}
+
+// ── SetFanSpeed ───────────────────────────────────────────────────────────────
+
+func (a *Avalonminer) SetFanSpeed(ctx context.Context, pct int) error {
+	if pct != -1 && (pct < 0 || pct > 100) {
+		return fmt.Errorf("avalonminer: fan speed %d out of range", pct)
+	}
+	auto := 1
+	if pct != -1 {
+		auto = 0
+	}
+	_, err := a.rpcCli.Send(ctx, "setfan",
+		map[string]interface{}{"fan_pct": pct, "auto": auto})
+	return err
+}
+
+// ── UpdateFirmware ────────────────────────────────────────────────────────────
+
+func (a *Avalonminer) UpdateFirmware(ctx context.Context, fw FirmwareInfo) error {
+	if fw.LocalPath == "" && fw.URL == "" {
+		return fmt.Errorf("avalonminer: UpdateFirmware requires LocalPath or URL")
+	}
+	filePath := fw.LocalPath
+	if filePath == "" {
+		tmp, err := downloadToTemp(ctx, fw.URL)
+		if err != nil {
+			return fmt.Errorf("avalonminer: firmware download: %w", err)
+		}
+		defer removeTemp(tmp)
+		filePath = tmp
+	}
+	body, contentType, err := buildMultipartFile("firmware", filePath)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s/cgi-bin/upgrade.cgi", a.ip)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
+		body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := a.httpCli.Do(req)
+	if err != nil {
+		return fmt.Errorf("avalonminer firmware upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("avalonminer firmware upload: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

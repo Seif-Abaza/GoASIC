@@ -315,3 +315,69 @@ func stringOr(m map[string]interface{}, keys ...string) string {
 	}
 	return ""
 }
+
+// ── SetMode ───────────────────────────────────────────────────────────────────
+
+func (ir *IceRiver) SetMode(ctx context.Context, mode MiningMode) error {
+	if mode == ModeSleep {
+		return ir.StopMining(ctx)
+	}
+	modeMap := map[MiningMode]string{
+		ModeNormal:   "normal",
+		ModeLowPower: "low_power",
+		ModeHighPerf: "high_performance",
+	}
+	m, ok := modeMap[mode]
+	if !ok {
+		return fmt.Errorf("iceriver: unsupported mode %q", mode)
+	}
+	_, err := ir.apiPost(ctx, "api/v1/mode", map[string]string{"mode": m})
+	return err
+}
+
+// ── SetFanSpeed ───────────────────────────────────────────────────────────────
+
+func (ir *IceRiver) SetFanSpeed(ctx context.Context, pct int) error {
+	if pct != -1 && (pct < 0 || pct > 100) {
+		return fmt.Errorf("iceriver: fan speed %d out of range", pct)
+	}
+	payload := map[string]interface{}{"fan_pct": pct, "auto": pct == -1}
+	_, err := ir.apiPost(ctx, "api/v1/fan", payload)
+	return err
+}
+
+// ── UpdateFirmware ────────────────────────────────────────────────────────────
+
+func (ir *IceRiver) UpdateFirmware(ctx context.Context, fw FirmwareInfo) error {
+	if fw.LocalPath == "" && fw.URL == "" {
+		return fmt.Errorf("iceriver: UpdateFirmware requires LocalPath or URL")
+	}
+	filePath := fw.LocalPath
+	if filePath == "" {
+		tmp, err := downloadToTemp(ctx, fw.URL)
+		if err != nil {
+			return fmt.Errorf("iceriver: firmware download: %w", err)
+		}
+		defer removeTemp(tmp)
+		filePath = tmp
+	}
+	body, contentType, err := buildMultipartFile("firmware", filePath)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s:8080/api/v1/firmware/update", ir.ip)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := ir.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("iceriver firmware upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("iceriver firmware upload: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}

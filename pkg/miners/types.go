@@ -130,6 +130,24 @@ func (c *MinerConfig) Pool(i int) PoolConfig {
 
 // ── Miner interface ───────────────────────────────────────────────────────────
 
+// MiningMode represents the operating mode of a miner.
+type MiningMode string
+
+const (
+	ModeNormal      MiningMode = "normal"       // standard full-power mode
+	ModeLowPower    MiningMode = "low_power"     // LPM – reduced freq/voltage
+	ModeHighPerf    MiningMode = "high_perf"     // overclocked / turbo
+	ModeSleep       MiningMode = "sleep"         // minimal power, mining paused
+)
+
+// FirmwareInfo holds metadata about a firmware update package.
+type FirmwareInfo struct {
+	Version     string // version string, e.g. "BOS+ 22.02.1"
+	URL         string // download URL (used by stock firmware updaters)
+	LocalPath   string // local file path if already downloaded
+	Description string
+}
+
 // Miner is the interface all brand drivers must implement.
 type Miner interface {
 	// GetData returns a live snapshot of miner performance and status.
@@ -150,6 +168,14 @@ type Miner interface {
 	ResumeMining(ctx context.Context) error
 	// IsMining returns true if the miner is actively hashing.
 	IsMining(ctx context.Context) (bool, error)
+	// SetMode sets the operating mode (Normal / LowPower / HighPerf / Sleep).
+	SetMode(ctx context.Context, mode MiningMode) error
+	// SetFanSpeed sets the fan speed as a percentage (0–100).
+	// Pass -1 to restore automatic fan control.
+	SetFanSpeed(ctx context.Context, pct int) error
+	// UpdateFirmware flashes new firmware onto the miner.
+	// The call blocks until the flash completes or ctx is cancelled.
+	UpdateFirmware(ctx context.Context, fw FirmwareInfo) error
 	// IP returns the miner's IP address string.
 	IP() string
 	// Brand returns the manufacturer string, e.g. "Antminer".

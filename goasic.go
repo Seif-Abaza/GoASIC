@@ -86,3 +86,46 @@ func DBGet(model string) *MinerSpec { return minerdb.Get(model) }
 
 // DBCount returns the total number of known models.
 func DBCount() int { return minerdb.Count() }
+
+// ── New types ─────────────────────────────────────────────────────────────────
+
+// MiningMode represents the operating mode of a miner.
+type MiningMode = miners.MiningMode
+
+// FirmwareInfo holds metadata for a firmware update.
+type FirmwareInfo = miners.FirmwareInfo
+
+const (
+	ModeNormal   = miners.ModeNormal
+	ModeLowPower = miners.ModeLowPower
+	ModeHighPerf = miners.ModeHighPerf
+	ModeSleep    = miners.ModeSleep
+)
+
+// ── Alternative firmware constructors ────────────────────────────────────────
+
+// NewBraiinsOS creates a driver for Antminer hardware running Braiins OS+.
+func NewBraiinsOS(ip, username, password string) (Miner, error) {
+	return miners.NewBraiinsOS(ip, username, password)
+}
+
+// NewVnish creates a driver for Antminer hardware running Vnish firmware.
+func NewVnish(ip, username, password string) (Miner, error) {
+	return miners.NewVnish(ip, username, password)
+}
+
+// NewLuxOS creates a driver for Antminer hardware running LuxOS firmware.
+// bearerToken is the API token obtained from the LuxOS web panel.
+func NewLuxOS(ip, bearerToken string) (Miner, error) {
+	return miners.NewLuxOS(ip, bearerToken)
+}
+
+// NewHiveon creates a driver for Antminer hardware running Hiveon firmware.
+func NewHiveon(ip, username, password string) (Miner, error) {
+	return miners.NewHiveon(ip, username, password)
+}
+
+// NewInnosilicon creates a driver for Innosilicon T3/T3+/A10/A11 hardware.
+func NewInnosilicon(ip string) (Miner, error) {
+	return miners.NewInnosilicon(ip)
+}

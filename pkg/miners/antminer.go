@@ -438,3 +438,130 @@ func poolPW(p PoolConfig) string {
 	}
 	return p.Password
 }
+
+// ── SetMode ───────────────────────────────────────────────────────────────────
+//
+// Antminer operating modes map to bitmain-work-mode CGI parameter:
+//   0 = Normal, 1 = Low Power, 2 = High Performance (not all models)
+// Hydro/Immersion use the same token-auth endpoint.
+
+func (a *Antminer) SetMode(ctx context.Context, mode MiningMode) error {
+	modeCode := map[MiningMode]string{
+		ModeNormal:   "0",
+		ModeLowPower: "1",
+		ModeHighPerf: "2",
+		ModeSleep:    "sleep",
+	}
+	code, ok := modeCode[mode]
+	if !ok {
+		return fmt.Errorf("antminer: unsupported mode %q", mode)
+	}
+	if mode == ModeSleep {
+		return a.StopMining(ctx)
+	}
+	payload := map[string]string{"bitmain-work-mode": code}
+	switch a.firmware {
+	case "hydro", "immersion":
+		token, err := a.getHydroToken(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = a.httpPost(ctx, "cgi-bin/set_miner_conf.cgi", payload, token)
+		return err
+	default:
+		_, err := a.httpPost(ctx, "cgi-bin/set_miner_conf.cgi", payload, "")
+		return err
+	}
+}
+
+// ── SetFanSpeed ───────────────────────────────────────────────────────────────
+//
+// Antminer fan speed is set via bitmain-fan-pwm (0–100) and bitmain-fan-ctrl.
+// Pass pct=-1 to restore automatic control.
+
+func (a *Antminer) SetFanSpeed(ctx context.Context, pct int) error {
+	if pct != -1 && (pct < 0 || pct > 100) {
+		return fmt.Errorf("antminer: fan speed %d out of range (0–100, or -1 for auto)", pct)
+	}
+	var payload map[string]interface{}
+	if pct == -1 {
+		payload = map[string]interface{}{"bitmain-fan-ctrl": true, "bitmain-fan-pwm": "100"}
+	} else {
+		payload = map[string]interface{}{"bitmain-fan-ctrl": false, "bitmain-fan-pwm": fmt.Sprintf("%d", pct)}
+	}
+	switch a.firmware {
+	case "hydro", "immersion":
+		token, err := a.getHydroToken(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = a.httpPost(ctx, "cgi-bin/set_miner_conf.cgi", payload, token)
+		return err
+	default:
+		_, err := a.httpPost(ctx, "cgi-bin/set_miner_conf.cgi", payload, "")
+		return err
+	}
+}
+
+// ── UpdateFirmware ────────────────────────────────────────────────────────────
+//
+// Antminer firmware update:
+//   - Standard/AltAlgo: POST multipart form to /cgi-bin/upgrade.cgi
+//   - Hydro/Immersion:  Token-auth POST to /cgi-bin/firmware_update.cgi
+//
+// If fw.URL is set and fw.LocalPath is empty, the firmware file is fetched
+// from the URL first, then streamed to the miner.
+
+func (a *Antminer) UpdateFirmware(ctx context.Context, fw FirmwareInfo) error {
+	if fw.LocalPath == "" && fw.URL == "" {
+		return fmt.Errorf("antminer: UpdateFirmware requires LocalPath or URL")
+	}
+
+	// Fetch remote file if only URL provided
+	filePath := fw.LocalPath
+	if filePath == "" {
+		tmp, err := downloadToTemp(ctx, fw.URL)
+		if err != nil {
+			return fmt.Errorf("antminer: firmware download failed: %w", err)
+		}
+		defer removeTemp(tmp)
+		filePath = tmp
+	}
+
+	switch a.firmware {
+	case "hydro", "immersion":
+		token, err := a.getHydroToken(ctx)
+		if err != nil {
+			return fmt.Errorf("antminer: hydro firmware token: %w", err)
+		}
+		return a.uploadFirmwareMultipart(ctx, "cgi-bin/firmware_update.cgi", filePath, token)
+	default:
+		return a.uploadFirmwareMultipart(ctx, "cgi-bin/upgrade.cgi", filePath, "")
+	}
+}
+
+func (a *Antminer) uploadFirmwareMultipart(ctx context.Context, path, filePath, token string) error {
+	body, contentType, err := buildMultipartFile("firmware", filePath)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s/%s", a.ip, strings.TrimPrefix(path, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	if token != "" {
+		req.Header.Set("X-Token", token)
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := a.httpCli.Do(req)
+	if err != nil {
+		return fmt.Errorf("antminer firmware upload to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("antminer firmware upload: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}

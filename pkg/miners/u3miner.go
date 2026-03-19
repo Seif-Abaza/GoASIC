@@ -248,3 +248,65 @@ func (u *U3Miner) restPost(ctx context.Context, path string, payload interface{}
 	json.Unmarshal(respBody, &result)
 	return result, nil
 }
+
+// ── SetMode ───────────────────────────────────────────────────────────────────
+
+func (u *U3Miner) SetMode(ctx context.Context, mode MiningMode) error {
+	if mode == ModeSleep {
+		return u.StopMining(ctx)
+	}
+	modeMap := map[MiningMode]string{
+		ModeNormal:   "0",
+		ModeLowPower: "1",
+		ModeHighPerf: "2",
+	}
+	m, ok := modeMap[mode]
+	if !ok {
+		return fmt.Errorf("u3miner: unsupported mode %q", mode)
+	}
+	_, err := u.restPost(ctx, "api/mining/mode", map[string]string{"mode": m})
+	return err
+}
+
+// ── SetFanSpeed ───────────────────────────────────────────────────────────────
+
+func (u *U3Miner) SetFanSpeed(ctx context.Context, pct int) error {
+	// U3 is hydro-cooled — no fans. Return descriptive error.
+	return fmt.Errorf("u3miner: fan speed control not applicable (hydro-cooled unit)")
+}
+
+// ── UpdateFirmware ────────────────────────────────────────────────────────────
+
+func (u *U3Miner) UpdateFirmware(ctx context.Context, fw FirmwareInfo) error {
+	if fw.LocalPath == "" && fw.URL == "" {
+		return fmt.Errorf("u3miner: UpdateFirmware requires LocalPath or URL")
+	}
+	filePath := fw.LocalPath
+	if filePath == "" {
+		tmp, err := downloadToTemp(ctx, fw.URL)
+		if err != nil {
+			return fmt.Errorf("u3miner: firmware download: %w", err)
+		}
+		defer removeTemp(tmp)
+		filePath = tmp
+	}
+	body, contentType, err := buildMultipartFile("firmware", filePath)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s:8888/api/firmware/update", u.ip)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := u.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("u3miner firmware upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("u3miner firmware upload: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}

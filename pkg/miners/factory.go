@@ -41,8 +41,18 @@ func Detect(ctx context.Context, ip string) (Miner, error) {
 					return NewU3Miner(ip)
 				case strings.Contains(d, "whatsminer") || strings.Contains(d, "microbt"):
 					return NewWhatsminer(ip)
+				case strings.Contains(d, "braiins") || strings.Contains(d, "bos+"):
+					return NewBraiinsOS(ip, "", "")
+				case strings.Contains(d, "vnish"):
+					return NewVnish(ip, "", "")
+				case strings.Contains(d, "luxos"):
+					return NewLuxOS(ip, "")
+				case strings.Contains(d, "hiveon"):
+					return NewHiveon(ip, "", "")
 				case strings.Contains(d, "antminer") || strings.Contains(d, "bitmain"):
 					return NewAntminer(ip)
+				case strings.Contains(d, "innosilicon"):
+					return NewInnosilicon(ip)
 				case strings.Contains(d, "avalon") || strings.Contains(d, "canaan"):
 					return NewAvalonminer(ip)
 				}
@@ -81,11 +91,26 @@ func Detect(ctx context.Context, ip string) (Miner, error) {
 		case strings.Contains(low, "u3") && (strings.Contains(low, "hyd") || strings.Contains(low, "hydro")):
 			return NewU3Miner(ip)
 		case strings.Contains(low, "antminer") || strings.Contains(low, "bitmain"):
+			// Check for alt-firmware signatures before falling back to stock
+			if strings.Contains(low, "braiins") || strings.Contains(low, "bos+") {
+				return NewBraiinsOS(ip, "", "")
+			}
+			if strings.Contains(low, "vnish") {
+				return NewVnish(ip, "", "")
+			}
+			if strings.Contains(low, "luxos") || strings.Contains(low, "luxor") {
+				return NewLuxOS(ip, "")
+			}
+			if strings.Contains(low, "hiveon") {
+				return NewHiveon(ip, "", "")
+			}
 			return NewAntminer(ip)
 		case strings.Contains(low, "whatsminer") || strings.Contains(low, "microbt"):
 			return NewWhatsminer(ip)
 		case strings.Contains(low, "avalon") || strings.Contains(low, "canaan"):
 			return NewAvalonminer(ip)
+		case strings.Contains(low, "innosilicon"):
+			return NewInnosilicon(ip)
 		}
 	}
 
@@ -141,3 +166,13 @@ func portOpen(ctx context.Context, ip string, port int, timeout time.Duration) b
 func insecureTLS() *tls.Config {
 	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 }
+
+// ── Compile-time interface compliance checks ──────────────────────────────────
+// If any driver is missing a method the build fails with an explicit error.
+var (
+	_ Miner = (*Antminer)(nil)
+	_ Miner = (*Whatsminer)(nil)
+	_ Miner = (*Avalonminer)(nil)
+	_ Miner = (*IceRiver)(nil)
+	_ Miner = (*U3Miner)(nil)
+)

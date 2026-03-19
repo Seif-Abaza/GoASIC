@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -288,4 +290,92 @@ func (w *Whatsminer) IsMining(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// ── SetMode ───────────────────────────────────────────────────────────────────
+//
+// Whatsminer operating modes:
+//   Normal     → power_mode normal
+//   LowPower   → power_mode low  (LPM)
+//   HighPerf   → power_mode high (some models only)
+//   Sleep      → power_off
+
+func (w *Whatsminer) SetMode(ctx context.Context, mode MiningMode) error {
+	if mode == ModeSleep {
+		return w.StopMining(ctx)
+	}
+	modeMap := map[MiningMode]string{
+		ModeNormal:   "normal",
+		ModeLowPower: "low",
+		ModeHighPerf: "high",
+	}
+	m, ok := modeMap[mode]
+	if !ok {
+		return fmt.Errorf("whatsminer: unsupported mode %q", mode)
+	}
+	_, err := w.rpcCli.Send(ctx, "set_power_pct", map[string]string{"percent": m})
+	if err != nil {
+		// Fallback: older firmware uses power_mode command
+		_, err = w.rpcCli.Send(ctx, "power_mode", map[string]string{"mode": m})
+	}
+	return err
+}
+
+// ── SetFanSpeed ───────────────────────────────────────────────────────────────
+//
+// Whatsminer fan control via set_fan_pwm RPC command.
+// pct=-1 restores automatic control.
+
+func (w *Whatsminer) SetFanSpeed(ctx context.Context, pct int) error {
+	if pct != -1 && (pct < 0 || pct > 100) {
+		return fmt.Errorf("whatsminer: fan speed %d out of range", pct)
+	}
+	auto := "true"
+	fanPct := 100
+	if pct != -1 {
+		auto = "false"
+		fanPct = pct
+	}
+	_, err := w.rpcCli.Send(ctx, "set_fan_pwm",
+		map[string]interface{}{"fan_pwm": fanPct, "auto": auto})
+	return err
+}
+
+// ── UpdateFirmware ────────────────────────────────────────────────────────────
+//
+// Whatsminer firmware update via HTTP POST to /cgi-bin/luci/admin/upgrade.
+// Token-auth firmware (M50S++/M60+) requires an encrypted token in the header.
+
+func (w *Whatsminer) UpdateFirmware(ctx context.Context, fw FirmwareInfo) error {
+	if fw.LocalPath == "" && fw.URL == "" {
+		return fmt.Errorf("whatsminer: UpdateFirmware requires LocalPath or URL")
+	}
+	filePath := fw.LocalPath
+	if filePath == "" {
+		tmp, err := downloadToTemp(ctx, fw.URL)
+		if err != nil {
+			return fmt.Errorf("whatsminer: firmware download: %w", err)
+		}
+		defer removeTemp(tmp)
+		filePath = tmp
+	}
+	body, contentType, err := buildMultipartFile("firmware", filePath)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s/cgi-bin/luci/admin/upgrade", w.ip)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("whatsminer firmware upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("whatsminer firmware upload: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

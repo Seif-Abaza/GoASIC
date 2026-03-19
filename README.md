@@ -1,47 +1,74 @@
 # goasic
 
-A Go library for managing Bitcoin and alt-coin ASIC miners — the Go equivalent of [pyasic](https://github.com/UpstreamData/pyasic).
+A Go library for managing Bitcoin and alt-coin ASIC miners — the complete Go equivalent of [pyasic](https://github.com/UpstreamData/pyasic).
 
-Supports **58 models** across **5 brands** as of 2026.
-
----
-
-## Features
-
-- Auto-detects miner brand (Antminer, Whatsminer, Avalonminer, IceRiver, U3)
-- All firmware classes handled: Air / Hydro / Immersion / Alt-algorithm / BTMiner token-auth
-- Embedded `MinerDB.csv` for expected hashrate, chip count, algorithm, cooling lookup
-- Concurrent subnet scanner
-- JSON or table output from the CLI tool
-- Context-aware — all network calls respect `context.Context` deadlines and cancellation
+Supports **68 models** across **9 brands/firmware** as of 2026.
 
 ---
 
-## Supported Models
+## Feature Parity with pyasic
+
+| Feature | pyasic | goasic |
+|---|---|---|
+| Multi-manufacturer support | ✓ | ✓ |
+| Concurrent scanning (async) | ✓ asyncio | ✓ goroutines |
+| Reboot | ✓ | ✓ |
+| Pool / wallet config push | ✓ | ✓ |
+| **Fan speed control** | ✓ | ✓ |
+| **Operating modes** (LPM / Normal / High Perf) | ✓ | ✓ |
+| Hashrate telemetry | ✓ | ✓ |
+| Temperature telemetry | ✓ | ✓ |
+| Power consumption telemetry | ✓ | ✓ |
+| Chip efficiency (J/TH) | ✓ | ✓ |
+| **Firmware update** (local file + URL) | ✓ | ✓ |
+| Fault LED control | ✓ | ✓ |
+| Stop / Resume mining | ✓ | ✓ |
+| **Braiins OS+** firmware | ✓ | ✓ |
+| **Vnish** firmware | ✓ | ✓ |
+| **LuxOS** firmware | ✓ | ✓ |
+| **Hiveon** firmware | ✓ | ✓ |
+| **Innosilicon** hardware | ✓ | ✓ |
+| Zero external dependencies | — | ✓ |
+| Compile-time interface checks | — | ✓ |
+
+---
+
+## Supported Hardware
 
 ### Antminer (Bitmain) — 42 models
-
 | Family | Models | Algorithm | Cooling |
 |--------|--------|-----------|---------|
 | S9 | S9, S9K, S9SE | SHA-256d | Air |
-| S19 | S19, S19 Pro, S19j, S19j Pro, S19K Pro (×2), S19 XP (×5), S19e XP Hyd, S19 XP+ Hyd, T19 | SHA-256d | Air / Hydro |
-| S21 | S21, S21a, S21b, S21 Pro, S21 XP, S21 Imm, S21 XP Imm, S21e Hyd (×3), S21+ Hyd (×3), S21 XP Hyd | SHA-256d | Air / Hydro / Immersion |
-| Scrypt | L7 (×2), L9 (×4) | Scrypt | Air |
+| S17 | S17, S17 Pro, T17, T17+ | SHA-256d | Air |
+| S19 | S19, S19 Pro, S19j, S19j Pro, S19K Pro (x2), S19 XP (x5), S19e XP Hyd, S19 XP+ Hyd, T19 | SHA-256d | Air/Hydro |
+| S21 | S21, S21a, S21b, S21 Pro, S21 XP, S21 Imm, S21 XP Imm, S21e Hyd (x3), S21+ Hyd (x3), S21 XP Hyd | SHA-256d | Air/Hydro/Imm |
+| Scrypt | L7 (x2), L9 (x4) | Scrypt | Air |
 | X11 | D7 | X11 | Air |
 | Kaspa | K7, KS5 | kHeavyHash | Air |
 | Equihash | Z15 Pro | Equihash | Air |
 
-### Whatsminer (MicroBT) — 6 models
-M30S, M31S, M50, M50S++, M60, M61
+### Whatsminer (MicroBT) — 8 models
+M20, M20S, M30S, M31S, M50, M50S++, M60, M61
 
-### Avalonminer (Canaan) — 6 models
-Nano 3, Nano 3S, Mini 3, A1346, A1366, A15 XP
+### Avalonminer (Canaan) — 9 models
+Nano 3, Nano 3S, Mini 3, A1066, A1166, A1246, A1346, A1366, A15 XP
 
 ### IceRiver — 3 models (KS7 variants)
-KS7 (36T), KS7 (40T), KS7 (45T)
+### U3 — 1 model (S21 XP Hyd 860T)
+### Innosilicon — 1 model (T3+)
 
-### U3 — 1 model
-S21 XP Hyd (860T)
+---
+
+## Alternative Firmware Support
+
+| Firmware | Auth | Notes |
+|----------|------|-------|
+| Braiins OS+ | HTTP Basic | Profiles, auto-tuning, open source |
+| Vnish | HTTP Basic | Per-chip frequency tuning |
+| LuxOS | Bearer token | Power-target mode, OTA by URL |
+| Hiveon | HTTP Basic | Cloud management |
+
+goasic auto-detects which firmware is running via HTTP fingerprinting.
 
 ---
 
@@ -51,106 +78,103 @@ S21 XP Hyd (860T)
 go get github.com/goasic/goasic
 ```
 
+Zero external dependencies — pure Go standard library.
+
+---
+
 ## Quick Start
 
 ```go
-package main
+ctx := context.Background()
 
-import (
-    "context"
-    "fmt"
-    "github.com/goasic/goasic"
-)
+// Auto-detect miner type
+miner, _ := goasic.Detect(ctx, "192.168.1.50")
 
-func main() {
-    ctx := context.Background()
+// Live data
+data, _ := miner.GetData(ctx)
+fmt.Println(goasic.Summary(data))
+// [192.168.1.50] Antminer S21 XP | 268.45 TH/s (99.4%) | mining | algo:SHA-256d | cool:Air
 
-    // Auto-detect miner type and connect
-    miner, err := goasic.Detect(ctx, "192.168.1.50")
-    if err != nil {
-        panic(err)
-    }
+// Pool config
+cfg := goasic.MinerConfig{}
+cfg.AddPool("stratum+tcp://pool.example.com:3333", "worker.001", "x")
+miner.SendConfig(ctx, cfg)
 
-    // Get live snapshot
-    data, err := miner.GetData(ctx)
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(goasic.Summary(data))
-    // [192.168.1.50] Antminer S21 XP | 268.45 TH/s (99.4%) | mining | algo:SHA-256d | cool:Air
+// Operating mode
+miner.SetMode(ctx, goasic.ModeLowPower)  // LPM
+miner.SetMode(ctx, goasic.ModeNormal)   // Normal
+miner.SetMode(ctx, goasic.ModeHighPerf) // Turbo
 
-    // Push pool config
-    cfg := goasic.MinerConfig{}
-    cfg.AddPool("stratum+tcp://pool.example.com:3333", "worker.001", "x")
-    miner.SendConfig(ctx, cfg)
+// Fan speed
+miner.SetFanSpeed(ctx, 60)  // 60% PWM
+miner.SetFanSpeed(ctx, -1)  // auto
 
-    // Fault LED
-    miner.FaultLightOn(ctx)
+// Firmware update (URL or local file)
+miner.UpdateFirmware(ctx, goasic.FirmwareInfo{
+    URL: "https://example.com/firmware.bin",
+})
 
-    // Scan a whole subnet
-    miners, _ := goasic.ScanSubnet(ctx, "192.168.1.0/24", 100)
-    fmt.Printf("Found %d miners\n", len(miners))
+// Alternative firmware drivers
+bos, _ := goasic.NewBraiinsOS("192.168.1.51", "root", "admin")
+lux, _ := goasic.NewLuxOS("192.168.1.52", "my-bearer-token")
+vni, _ := goasic.NewVnish("192.168.1.53", "root", "admin")
+hiv, _ := goasic.NewHiveon("192.168.1.54", "root", "admin")
+inn, _ := goasic.NewInnosilicon("192.168.1.55")
 
-    // Look up a model in the DB
-    spec := goasic.DBGet("Antminer S21 XP")
-    fmt.Printf("Expected: %.0f TH/s, %dW\n", spec.HashrateTHS, spec.PowerWatts)
-}
+// Subnet scan
+miners, _ := goasic.ScanSubnet(ctx, "192.168.1.0/24", 100)
+
+// MinerDB lookup
+spec := goasic.DBGet("Antminer S21 XP")
+fmt.Printf("%.0f TH/s @ %dW = %.1f J/TH\n",
+    spec.HashrateTHS, spec.PowerWatts,
+    float64(spec.PowerWatts)/spec.HashrateTHS)
 ```
 
-## CLI Tool
+---
+
+## CLI Scan Tool
 
 ```bash
-# Scan and print a table
 go run ./cmd/scan -subnet 192.168.1.0/24 -concurrency 100
-
-# JSON output
 go run ./cmd/scan -subnet 192.168.1.0/24 -json
-
-# Flags
--subnet       CIDR to scan          (default: 192.168.1.0/24)
--concurrency  parallel probes       (default: 100)
--timeout      total scan timeout    (default: 2m)
--json         JSON output
 ```
+
+---
+
+## Running Tests
+
+```bash
+go test ./...           # all 85 tests
+go test -v ./...        # verbose
+go test -race ./...     # race detector
+```
+
+---
 
 ## Project Structure
 
 ```
 goasic/
-├── goasic.go              # Public API (top-level package)
-├── go.mod
-├── cmd/
-│   └── scan/main.go       # CLI scan tool
+├── goasic.go                  # Public API
+├── go.mod                     # Zero external dependencies
+├── cmd/scan/main.go           # CLI tool
 └── pkg/
-    ├── minerdb/
-    │   ├── minerdb.go     # Embedded MinerDB.csv lookup
-    │   └── minerdb.csv    # 58-model database
+    ├── minerdb/               # Embedded 68-model database
     ├── miners/
-    │   ├── types.go       # MinerData, MinerConfig, Miner interface
-    │   ├── factory.go     # Auto-detection + IP validation
-    │   ├── antminer.go    # Bitmain driver (Air/Hydro/Immersion/AltAlgo)
-    │   ├── whatsminer.go  # MicroBT driver (Legacy + BTMiner token-auth)
-    │   ├── avalonminer.go # Canaan driver
-    │   ├── iceriver.go    # IceRiver REST driver (port 8080)
-    │   └── u3miner.go     # U3 hydro driver (RPC + REST port 8888)
-    ├── rpc/
-    │   └── rpc.go         # cgminer JSON-RPC client (port 4028)
-    └── network/
-        └── network.go     # Concurrent subnet scanner
+    │   ├── types.go           # Miner interface (14 methods)
+    │   ├── factory.go         # Auto-detection
+    │   ├── firmware.go        # Shared firmware helpers
+    │   ├── antminer.go        # Bitmain all variants
+    │   ├── whatsminer.go      # MicroBT + BTMiner token auth
+    │   ├── avalonminer.go     # Canaan
+    │   ├── iceriver.go        # IceRiver REST
+    │   ├── u3miner.go         # U3 hydro
+    │   ├── innosilicon.go     # Innosilicon
+    │   └── altfirmware.go     # BraiinsOS / Vnish / LuxOS / Hiveon
+    ├── rpc/rpc.go             # cgminer JSON-RPC client
+    └── network/network.go     # Concurrent subnet scanner
 ```
-
-## Firmware Classes Handled
-
-| Brand | Class | Details |
-|-------|-------|---------|
-| Antminer | Standard Air | CGI endpoints, GHS 5s hashrate |
-| Antminer | Alt-Algo Air | L7→MHS, Z15→KSols/s, D7/K7→GHS |
-| Antminer | Hydro | Token auth via `/cgi-bin/get_token.cgi`, JSON config push |
-| Antminer | Immersion | Token auth, fan endpoints absent |
-| Whatsminer | Legacy | Plain `updatePools` RPC |
-| Whatsminer | BTMiner Token-Auth | MD5(salt+MD5(password)) enc token, `update_pools` |
-| IceRiver | REST | HTTP on port 8080, GH/TH unit normalisation |
-| U3 | Hydro REST | RPC on 4028 + REST on 8888 for hydro data |
 
 ## License
 

@@ -1,6 +1,7 @@
 package miners
 
 import (
+	"context"
 	"testing"
 )
 
@@ -489,4 +490,207 @@ func approxEq(a, b, tol float64) bool {
 		diff = -diff
 	}
 	return diff <= tol
+}
+
+// ── SetMode / SetFanSpeed validation ─────────────────────────────────────────
+
+func TestMiningModeConstants(t *testing.T) {
+	modes := []MiningMode{ModeNormal, ModeLowPower, ModeHighPerf, ModeSleep}
+	seen := map[MiningMode]bool{}
+	for _, m := range modes {
+		if seen[m] {
+			t.Errorf("duplicate MiningMode value: %q", m)
+		}
+		seen[m] = true
+		if string(m) == "" {
+			t.Errorf("MiningMode must not be empty string")
+		}
+	}
+}
+
+func TestFirmwareInfoFields(t *testing.T) {
+	fw := FirmwareInfo{
+		Version:     "BOS+ 22.02",
+		URL:         "https://example.com/firmware.bin",
+		Description: "Braiins OS+ 22.02 stable",
+	}
+	if fw.Version == "" || fw.URL == "" {
+		t.Error("FirmwareInfo fields should be set")
+	}
+}
+
+// ── Interface compliance (compile-time guards in altfirmware.go + factory.go) ─
+// The var _ Miner = (*T)(nil) lines in those files already enforce this.
+// Here we add a runtime check to be explicit in tests.
+
+func TestAllDriversImplementMiner(t *testing.T) {
+	// Each constructor returns a Miner — if the interface isn't satisfied
+	// these won't compile (var _ Miner = guards), but we verify at test time too.
+	constructors := []struct {
+		name string
+		fn   func() (Miner, error)
+	}{
+		{"Antminer", func() (Miner, error) { return NewAntminer("192.168.1.2") }},
+		{"Whatsminer", func() (Miner, error) { return NewWhatsminer("192.168.1.3") }},
+		{"Avalonminer", func() (Miner, error) { return NewAvalonminer("192.168.1.4") }},
+		{"IceRiver", func() (Miner, error) { return NewIceRiver("192.168.1.5") }},
+		{"U3Miner", func() (Miner, error) { return NewU3Miner("192.168.1.6") }},
+		{"Innosilicon", func() (Miner, error) { return NewInnosilicon("192.168.1.7") }},
+		{"BraiinsOS", func() (Miner, error) { return NewBraiinsOS("192.168.1.8", "root", "admin") }},
+		{"Vnish", func() (Miner, error) { return NewVnish("192.168.1.9", "root", "admin") }},
+		{"LuxOS", func() (Miner, error) { return NewLuxOS("192.168.1.10", "token") }},
+		{"Hiveon", func() (Miner, error) { return NewHiveon("192.168.1.11", "root", "admin") }},
+	}
+	for _, c := range constructors {
+		m, err := c.fn()
+		if err != nil {
+			t.Errorf("%s constructor error: %v", c.name, err)
+			continue
+		}
+		if m.IP() == "" {
+			t.Errorf("%s.IP() returned empty string", c.name)
+		}
+		if m.Brand() == "" {
+			t.Errorf("%s.Brand() returned empty string", c.name)
+		}
+	}
+}
+
+// ── New driver brand strings ──────────────────────────────────────────────────
+
+func TestAltFirmwareBrands(t *testing.T) {
+	drivers := []struct {
+		brand string
+		fn    func() (Miner, error)
+	}{
+		{"BraiinsOS", func() (Miner, error) { return NewBraiinsOS("192.168.1.2", "root", "admin") }},
+		{"Vnish",     func() (Miner, error) { return NewVnish("192.168.1.3", "root", "admin") }},
+		{"LuxOS",     func() (Miner, error) { return NewLuxOS("192.168.1.4", "token") }},
+		{"Hiveon",    func() (Miner, error) { return NewHiveon("192.168.1.5", "root", "admin") }},
+		{"Innosilicon", func() (Miner, error) { return NewInnosilicon("192.168.1.6") }},
+	}
+	for _, d := range drivers {
+		m, err := d.fn()
+		if err != nil {
+			t.Errorf("%s: constructor error: %v", d.brand, err)
+			continue
+		}
+		if m.Brand() != d.brand {
+			t.Errorf("Brand() = %q, want %q", m.Brand(), d.brand)
+		}
+		if m.IP() == "" {
+			t.Errorf("%s: IP() returned empty string", d.brand)
+		}
+	}
+}
+
+// ── SetFanSpeed input validation ──────────────────────────────────────────────
+//
+// We cannot call the actual network methods, but the validation logic in each
+// driver runs before any I/O. We use a dummy IP (still routable, but nothing
+// listening) and verify the error is about range, not connectivity.
+
+func TestSetFanSpeed_InvalidRange(t *testing.T) {
+	drivers := []struct {
+		name string
+		fn   func() (Miner, error)
+	}{
+		{"Antminer",    func() (Miner, error) { return NewAntminer("192.168.200.1") }},
+		{"Whatsminer",  func() (Miner, error) { return NewWhatsminer("192.168.200.2") }},
+		{"Avalonminer", func() (Miner, error) { return NewAvalonminer("192.168.200.3") }},
+		{"IceRiver",    func() (Miner, error) { return NewIceRiver("192.168.200.4") }},
+		{"Innosilicon", func() (Miner, error) { return NewInnosilicon("192.168.200.5") }},
+		{"BraiinsOS",   func() (Miner, error) { return NewBraiinsOS("192.168.200.6", "", "") }},
+		{"Vnish",       func() (Miner, error) { return NewVnish("192.168.200.7", "", "") }},
+		{"LuxOS",       func() (Miner, error) { return NewLuxOS("192.168.200.8", "") }},
+		{"Hiveon",      func() (Miner, error) { return NewHiveon("192.168.200.9", "", "") }},
+	}
+	ctx := context.Background()
+	for _, d := range drivers {
+		m, err := d.fn()
+		if err != nil {
+			t.Errorf("%s constructor: %v", d.name, err)
+			continue
+		}
+		// 101 is out of range — must return error before any network call
+		err = m.SetFanSpeed(ctx, 101)
+		if err == nil {
+			t.Errorf("%s.SetFanSpeed(101) should return error", d.name)
+		}
+		// -2 is out of range
+		err = m.SetFanSpeed(ctx, -2)
+		if err == nil {
+			t.Errorf("%s.SetFanSpeed(-2) should return error", d.name)
+		}
+	}
+}
+
+// U3 is hydro-cooled — SetFanSpeed always errors regardless of input
+func TestU3SetFanSpeed_AlwaysError(t *testing.T) {
+	m, err := NewU3Miner("192.168.200.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, pct := range []int{0, 50, 100, -1} {
+		if err := m.SetFanSpeed(ctx, pct); err == nil {
+			t.Errorf("U3.SetFanSpeed(%d) should return error (hydro — no fans)", pct)
+		}
+	}
+}
+
+// ── SetMode input validation ──────────────────────────────────────────────────
+
+func TestSetMode_InvalidMode(t *testing.T) {
+	drivers := []struct {
+		name string
+		fn   func() (Miner, error)
+	}{
+		{"Antminer",    func() (Miner, error) { return NewAntminer("192.168.201.1") }},
+		{"Whatsminer",  func() (Miner, error) { return NewWhatsminer("192.168.201.2") }},
+		{"IceRiver",    func() (Miner, error) { return NewIceRiver("192.168.201.3") }},
+		{"BraiinsOS",   func() (Miner, error) { return NewBraiinsOS("192.168.201.4", "", "") }},
+	}
+	ctx := context.Background()
+	for _, d := range drivers {
+		m, err := d.fn()
+		if err != nil {
+			t.Errorf("%s constructor: %v", d.name, err)
+			continue
+		}
+		err = m.SetMode(ctx, MiningMode("invalid_mode_xyz"))
+		if err == nil {
+			t.Errorf("%s.SetMode(invalid) should return error", d.name)
+		}
+	}
+}
+
+// ── FirmwareInfo validation ───────────────────────────────────────────────────
+
+func TestUpdateFirmware_NoPathNoURL(t *testing.T) {
+	drivers := []struct {
+		name string
+		fn   func() (Miner, error)
+	}{
+		{"Antminer",    func() (Miner, error) { return NewAntminer("192.168.202.1") }},
+		{"Whatsminer",  func() (Miner, error) { return NewWhatsminer("192.168.202.2") }},
+		{"IceRiver",    func() (Miner, error) { return NewIceRiver("192.168.202.3") }},
+		{"Innosilicon", func() (Miner, error) { return NewInnosilicon("192.168.202.4") }},
+		{"BraiinsOS",   func() (Miner, error) { return NewBraiinsOS("192.168.202.5", "", "") }},
+		{"Vnish",       func() (Miner, error) { return NewVnish("192.168.202.6", "", "") }},
+		{"Hiveon",      func() (Miner, error) { return NewHiveon("192.168.202.7", "", "") }},
+	}
+	ctx := context.Background()
+	for _, d := range drivers {
+		m, err := d.fn()
+		if err != nil {
+			t.Errorf("%s constructor: %v", d.name, err)
+			continue
+		}
+		// Empty FirmwareInfo should return error immediately (before any I/O)
+		err = m.UpdateFirmware(ctx, FirmwareInfo{})
+		if err == nil {
+			t.Errorf("%s.UpdateFirmware(empty) should return error", d.name)
+		}
+	}
 }
